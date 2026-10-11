@@ -49,10 +49,29 @@ jobs:
         shell: bash
         run: |
           cd "pkg/$NAME"
-          time ./waifu2x-ncnn-vulkan \
-            -i "$GITHUB_WORKSPACE/images/0.jpg" -o "$GITHUB_WORKSPACE/smoke.jpg" \
-            -m models-upconv_7_photo -s 2 -f jpg
-          ls -l "$GITHUB_WORKSPACE/smoke.jpg"
+          set +e
+          pass=0
+          run() {
+            local label="$1"; shift
+            echo "---------- $label ----------"
+            ./waifu2x-ncnn-vulkan -i "$GITHUB_WORKSPACE/images/0.jpg" -o "$GITHUB_WORKSPACE/out-$label.jpg" \
+              -m models-upconv_7_photo -s 2 -f jpg "$@"
+            local code=$?
+            if [ -s "$GITHUB_WORKSPACE/out-$label.jpg" ]; then
+              echo "退出码 $code; 输出文件 $(stat -c%s "$GITHUB_WORKSPACE/out-$label.jpg") 字节"
+              [ "$code" = "0" ] && pass=$((pass + 1))
+            else
+              echo "退出码 $code; 未生成输出文件"
+            fi
+          }
+          run A-default
+          run B-gpu-minus1 -g -1
+          echo "---------- 安装 mesa-vulkan-drivers (lavapipe 软件设备) 后重试 ----------"
+          apt-get install -y --no-install-recommends mesa-vulkan-drivers
+          run C-lavapipe
+          echo "=========================================="
+          echo "可用组合数 (退出码 0 且有输出): $pass"
+          [ "$pass" -gt 0 ]
 
       - uses: actions/upload-artifact@v7
         with:
