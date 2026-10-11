@@ -45,6 +45,17 @@ jobs:
           (cd pkg && zip -9 -r "$NAME.zip" "$NAME")
           unzip -l "pkg/$NAME.zip"
 
+      - name: 崩溃回溯 (诊断)
+        shell: bash
+        continue-on-error: true
+        run: |
+          cd "pkg/$NAME"
+          ls -la /usr/share/vulkan/icd.d 2>&1 | head -5
+          apt-get install -y --no-install-recommends gdb
+          gdb -batch -ex "set pagination off" -ex run -ex "bt 20" --args \
+            ./waifu2x-ncnn-vulkan -i "$GITHUB_WORKSPACE/images/0.jpg" -o "$GITHUB_WORKSPACE/gdb.jpg" \
+            -m models-upconv_7_photo -s 2 -f jpg 2>&1 | tail -35
+
       - name: 冒烟测试 (无 Vulkan 驱动, 走 CPU)
         shell: bash
         run: |

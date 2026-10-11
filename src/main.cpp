@@ -18,6 +18,7 @@
 #include "webp_image.h"
 
 #if defined(__linux__)
+#include <dirent.h>
 #include <dlfcn.h>
 #include <stdlib.h>
 #include <unistd.h>
@@ -428,6 +429,28 @@ void* save(void* args)
 // Linux 上没有 Vulkan 驱动或设备时必须整段跳过 GPU 初始化: ncnn 的 create_gpu_instance()
 // 在实例创建失败后会段错误, 而 CPU 路径 (process_cpu) 不依赖 Vulkan.
 #if defined(__linux__)
+static bool has_icd_manifest(const char* dir)
+{
+    // 只判断目录存在是不够的: libvulkan1 会带一个空的 icd.d 目录.
+    DIR* d = opendir(dir);
+    if (!d)
+        return false;
+
+    bool found = false;
+    for (struct dirent* entry = readdir(d); entry; entry = readdir(d))
+    {
+        const char* dot = strrchr(entry->d_name, '.');
+        if (dot && strcmp(dot, ".json") == 0)
+        {
+            found = true;
+            break;
+        }
+    }
+
+    closedir(d);
+    return found;
+}
+
 static bool vulkan_usable()
 {
     void* handle = dlopen("libvulkan.so.1", RTLD_LAZY);
@@ -442,9 +465,9 @@ static bool vulkan_usable()
     if (icd_files && icd_files[0])
         return true;
 
-    return access("/usr/share/vulkan/icd.d", F_OK) == 0
-        || access("/etc/vulkan/icd.d", F_OK) == 0
-        || access("/usr/local/share/vulkan/icd.d", F_OK) == 0;
+    return has_icd_manifest("/usr/share/vulkan/icd.d")
+        || has_icd_manifest("/etc/vulkan/icd.d")
+        || has_icd_manifest("/usr/local/share/vulkan/icd.d");
 }
 #else
 static bool vulkan_usable()
