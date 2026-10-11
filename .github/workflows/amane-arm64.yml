@@ -49,12 +49,20 @@ jobs:
         shell: bash
         continue-on-error: true
         run: |
+          set +e
           cd "pkg/$NAME"
-          ls -la /usr/share/vulkan/icd.d 2>&1 | head -5
+          echo "--- 环境 ---"
+          ls -la /usr/share/vulkan 2>&1 | head -5
+          echo "--- 直接运行并检查产物 ---"
+          ./waifu2x-ncnn-vulkan -i "$GITHUB_WORKSPACE/images/0.jpg" -o "$GITHUB_WORKSPACE/diag.jpg" \
+            -m models-upconv_7_photo -s 2 -f jpg
+          echo "退出码: $?"
+          ls -l "$GITHUB_WORKSPACE/diag.jpg" 2>&1 || echo "未生成输出文件"
+          echo "--- gdb 回溯 ---"
           apt-get install -y --no-install-recommends gdb
-          gdb -batch -ex "set pagination off" -ex run -ex "bt 20" --args \
+          gdb -batch -ex "set pagination off" -ex run -ex "bt 25" --args \
             ./waifu2x-ncnn-vulkan -i "$GITHUB_WORKSPACE/images/0.jpg" -o "$GITHUB_WORKSPACE/gdb.jpg" \
-            -m models-upconv_7_photo -s 2 -f jpg 2>&1 | tail -35
+            -m models-upconv_7_photo -s 2 -f jpg 2>&1 | tail -40
 
       - name: 冒烟测试 (无 Vulkan 驱动, 走 CPU)
         shell: bash
