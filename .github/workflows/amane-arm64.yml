@@ -1,0 +1,76 @@
+# 上游只发布 x86_64 Linux 包, 在 linux/arm64 上无法运行.
+# 本 workflow 用同一份源码重建 arm64 包, 产物挂在 tag `amane-*` 的 release 上 (Amane 按此 URL 下载).
+# 本提交的父提交为上游 master 64914665, 与发布 tag 20250915 的源码一致 (差异仅在 CI 文件).
+name: amane arm64
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "amane-*"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04-arm
+    # glibc 2.35: 覆盖 Debian 12 / Ubuntu 22.04 及以上
+    container: ubuntu:22.04
+    env:
+      NAME: waifu2x-ncnn-vulkan-20250915-linux-arm64
+    steps:
+      - name: 安装构建依赖
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends \
+            ca-certificates cmake g++ git libgomp1 libvulkan1 make unzip zip
+
+      - uses: actions/checkout@v7
+        with:
+          submodules: recursive
+
+      - name: 编译
+        run: |
+          cmake -S src -B build -DCMAKE_BUILD_TYPE=Release
+          cmake --build build -j"$(nproc)"
+
+      - name: 打包
+        run: |
+          mkdir -p "pkg/$NAME"
+          cp README.md LICENSE "pkg/$NAME/"
+          cp build/waifu2x-ncnn-vulkan "pkg/$NAME/"
+          strip -g "pkg/$NAME/waifu2x-ncnn-vulkan"
+          cp -r models/. "pkg/$NAME/"
+          (cd pkg && zip -9 -r "$NAME.zip" "$NAME")
+          unzip -l "pkg/$NAME.zip"
+
+      - name: 冒烟测试 (无 Vulkan 设备, 回退 CPU)
+        shell: bash
+        run: |
+          cd "pkg/$NAME"
+          time ./waifu2x-ncnn-vulkan \
+            -i "$GITHUB_WORKSPACE/images/0.jpg" -o "$GITHUB_WORKSPACE/smoke.jpg" \
+            -m models-upconv_7_photo -s 2 -f jpg
+          ls -l "$GITHUB_WORKSPACE/smoke.jpg"
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ${{ env.NAME }}
+          path: pkg/${{ env.NAME }}.zip
+          if-no-files-found: error
+
+      - uses: softprops/action-gh-release@v3
+        if: startsWith(github.ref, 'refs/tags/')
+        with:
+          files: pkg/${{ env.NAME }}.zip
+          name: linux/arm64 制品 (${{ github.ref_name }})
+          prerelease: true
+          fail_on_unmatched_files: true
+          body: |
+            上游 x86_64 Linux 包在 linux/arm64 上无法运行, 这里提供同一份源码的 arm64 重编译包.
+
+            - 源码: 本 tag 的父提交 (上游 master `64914665`, 与发布 tag `20250915` 的源码一致)
+            - 构建: GitHub `ubuntu-24.04-arm` runner, `ubuntu:22.04` 容器 (glibc 2.35)
+            - 运行期依赖: `libgomp1` 与 `libvulkan1`; 缺 `libvulkan.so.1` 时崩溃 (不会回退 CPU), 无 Vulkan 设备时按 CPU 运行
+            - 内容: `waifu2x-ncnn-vulkan` 与 `models/` 下的三个模型目录
