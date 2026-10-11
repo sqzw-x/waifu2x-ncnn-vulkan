@@ -53,26 +53,42 @@ jobs:
           (cd pkg && zip -9 -r "$NAME.zip" "$NAME")
           unzip -l "pkg/$NAME.zip"
 
-      - name: 崩溃回溯 (诊断, 临时)
+      - name: 崩溃定位 (诊断, 临时)
         if: matrix.arch == 'x86_64'
         shell: bash
         continue-on-error: true
         run: |
           set +e
-          apt-get install -y --no-install-recommends gdb
           echo "--- CPU ---"
           grep -m1 "model name" /proc/cpuinfo
           grep -o "avx512[a-z0-9_]*\|fma\|avx2\|avx" /proc/cpuinfo | sort -u | tr "\n" " "
           echo
-          echo "--- 带调试信息重建 ---"
-          cmake -S src -B build-dbg -DCMAKE_BUILD_TYPE=RelWithDebInfo >/dev/null
-          cmake --build build-dbg -j"$(nproc)" >/dev/null 2>&1
-          cp build-dbg/waifu2x-ncnn-vulkan "pkg/$NAME/dbg"
-          echo "--- gdb 回溯 ---"
+          echo "--- 注册表探测程序 ---"
+          cat > /tmp/probe.cpp <<'CPP'
+          #include <stdio.h>
+          #include "layer.h"
+          int main()
+          {
+              ncnn::Layer* gemm = ncnn::create_layer_cpu(ncnn::LayerType::Gemm);
+              ncnn::Layer* deconv = ncnn::create_layer_cpu(ncnn::LayerType::Deconvolution);
+              fprintf(stderr, "probe: Gemm=%p Deconvolution=%p\n", (void*)gemm, (void*)deconv);
+              return 0;
+          }
+          CPP
+          g++ -O1 -fopenmp /tmp/probe.cpp -Isrc/ncnn/src -Ibuild/ncnn/src -Lbuild/ncnn/src -lncnn -ldl -lpthread -o /tmp/probe \
+            && /tmp/probe
+
+          echo "--- 在生成源码里打印 gemm 指针后增量重建 ---"
+          ls build/ncnn/src/layer/x86/ | grep -i "deconvolution.*fma"
+          sed -i 's|gemm->load_param(pd);|fprintf(stderr, "[probe] gemm=%p\\n", (void*)gemm); gemm->load_param(pd);|' \
+            build/ncnn/src/layer/x86/deconvolution_x86_fma.cpp
+          grep -n "\[probe\] gemm" build/ncnn/src/layer/x86/deconvolution_x86_fma.cpp
+          cmake --build build -j"$(nproc)" 2>&1 | tail -3
+          cp build/waifu2x-ncnn-vulkan "pkg/$NAME/probe-bin"
           cd "pkg/$NAME"
-          gdb -batch -ex "set pagination off" -ex run -ex "bt 20" -ex "info registers rip" --args \
-            ./dbg -i "$GITHUB_WORKSPACE/images/0.jpg" -o "$GITHUB_WORKSPACE/diag.jpg" \
-            -m models-upconv_7_photo -s 2 -f jpg 2>&1 | tail -40
+          ./probe-bin -i "$GITHUB_WORKSPACE/images/0.jpg" -o "$GITHUB_WORKSPACE/diag.jpg" \
+            -m models-upconv_7_photo -s 2 -f jpg 2>&1 | tail -5
+          echo "退出码: $?"
 
       - name: 冒烟测试 (无 Vulkan 驱动, 走 CPU)
         shell: bash
