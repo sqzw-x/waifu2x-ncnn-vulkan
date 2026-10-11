@@ -59,15 +59,20 @@ jobs:
         continue-on-error: true
         run: |
           set +e
-          cd "pkg/$NAME"
           apt-get install -y --no-install-recommends gdb
-          gdb -batch -ex "set pagination off" -ex run -ex "bt 25" --args \
-            ./waifu2x-ncnn-vulkan -i "$GITHUB_WORKSPACE/images/0.jpg" -o "$GITHUB_WORKSPACE/diag.jpg" \
-            -m models-upconv_7_photo -s 2 -f jpg 2>&1 | tail -45
-          echo "--- 尾部输出 ---"
-          ./waifu2x-ncnn-vulkan -i "$GITHUB_WORKSPACE/images/0.jpg" -o "$GITHUB_WORKSPACE/diag2.jpg" \
-            -m models-upconv_7_photo -s 2 -f jpg 2>&1 | tail -5
-          echo "退出码: $?"
+          echo "--- CPU ---"
+          grep -m1 "model name" /proc/cpuinfo
+          grep -o "avx512[a-z0-9_]*\|fma\|avx2\|avx" /proc/cpuinfo | sort -u | tr "\n" " "
+          echo
+          echo "--- 带调试信息重建 ---"
+          cmake -S src -B build-dbg -DCMAKE_BUILD_TYPE=RelWithDebInfo >/dev/null
+          cmake --build build-dbg -j"$(nproc)" >/dev/null 2>&1
+          cp build-dbg/waifu2x-ncnn-vulkan "pkg/$NAME/dbg"
+          echo "--- gdb 回溯 ---"
+          cd "pkg/$NAME"
+          gdb -batch -ex "set pagination off" -ex run -ex "bt 20" -ex "info registers rip" --args \
+            ./dbg -i "$GITHUB_WORKSPACE/images/0.jpg" -o "$GITHUB_WORKSPACE/diag.jpg" \
+            -m models-upconv_7_photo -s 2 -f jpg 2>&1 | tail -40
 
       - name: 冒烟测试 (无 Vulkan 驱动, 走 CPU)
         shell: bash
