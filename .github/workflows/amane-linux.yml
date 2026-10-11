@@ -1,7 +1,7 @@
-# 上游只发布 x86_64 Linux 包, 在 linux/arm64 上无法运行.
-# 本 workflow 用同一份源码重建 arm64 包, 产物挂在 tag `amane-*` 的 release 上 (Amane 按此 URL 下载).
-# 本提交的父提交为上游 master 64914665, 与发布 tag 20250915 的源码一致 (差异仅在 CI 文件).
-name: amane arm64
+# 上游只发布 x86_64 Linux 包, 且其纯 CPU 模式会段错误 (缺少 Vulkan 设备时) — linux/arm64 与无 GPU 的容器都需要重建.
+# 本 workflow 用同一份源码重建两个架构的包, 产物挂在 tag `amane-*` 的 release 上 (Amane 按此 URL 下载).
+# 源码为上游 master 64914665 (与发布 tag 20250915 一致), 差异仅在 CI 文件与两处 CPU 路径修复.
+name: amane linux
 
 on:
   workflow_dispatch:
@@ -14,11 +14,19 @@ permissions:
 
 jobs:
   build:
-    runs-on: ubuntu-24.04-arm
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04-arm
+            arch: arm64
+          - runner: ubuntu-24.04
+            arch: x86_64
+    runs-on: ${{ matrix.runner }}
     # glibc 2.35: 覆盖 Debian 12 / Ubuntu 22.04 及以上
     container: ubuntu:22.04
     env:
-      NAME: waifu2x-ncnn-vulkan-20250915-linux-arm64
+      NAME: waifu2x-ncnn-vulkan-20250915-linux-${{ matrix.arch }}
     steps:
       - name: 安装构建依赖
         run: |
@@ -68,18 +76,28 @@ jobs:
           path: pkg/${{ env.NAME }}.zip
           if-no-files-found: error
 
-      - uses: softprops/action-gh-release@v3
-        if: startsWith(github.ref, 'refs/tags/')
+  release:
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/download-artifact@v8
         with:
-          files: pkg/${{ env.NAME }}.zip
-          name: linux/arm64 制品 (${{ github.ref_name }})
+          path: dist
+          merge-multiple: true
+
+      - uses: softprops/action-gh-release@v3
+        with:
+          files: dist/*.zip
+          name: linux 制品 (${{ github.ref_name }})
           prerelease: true
           fail_on_unmatched_files: true
           body: |
-            上游 x86_64 Linux 包在 linux/arm64 上无法运行, 这里提供同一份源码的 arm64 重编译包.
+            上游只发布 x86_64 Linux 包, 且其纯 CPU 模式会段错误, 无 Vulkan 设备的 Linux 上一律不可用.
+            这里用同一份源码重建 x86_64 与 arm64 两个包.
 
             - 源码: 上游 master `64914665` (与发布 tag `20250915` 的源码一致) + 两处 CPU 路径修复
-            - 构建: GitHub `ubuntu-24.04-arm` runner, `ubuntu:22.04` 容器 (glibc 2.35)
+            - 构建: GitHub runner (`ubuntu-24.04-arm` / `ubuntu-24.04`), `ubuntu:22.04` 容器 (glibc 2.35)
             - 运行期依赖: `libgomp1`; 有 Vulkan 驱动与设备时走 GPU, 没有时自动走 CPU
             - 与上游的差异 (上游在该两处会段错误, 即上游的纯 CPU 模式不可用):
               1. 无 Vulkan 驱动或设备时跳过 GPU 初始化
