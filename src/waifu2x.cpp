@@ -46,6 +46,13 @@ int Waifu2x::load(const std::string& parampath, const std::string& modelpath)
     net.opt.use_fp16_arithmetic = false;
     net.opt.use_int8_storage = true;
 
+    // x86 的 sgemm 卷积路径在 create_pipeline 里创建 Gemm 层, 该层在此构建的注册表里为空,
+    // Deconvolution_x86 解引用空指针而段错误. CPU 模式不走该路径.
+    if (vkdev == 0)
+    {
+        net.opt.use_sgemm_convolution = false;
+    }
+
     // CPU 模式 (vkdev 为空) 不能调用: ncnn 的实现会解引用该指针.
     if (vkdev)
     {

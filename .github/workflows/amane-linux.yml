@@ -63,32 +63,36 @@ jobs:
           grep -m1 "model name" /proc/cpuinfo
           grep -o "avx512[a-z0-9_]*\|fma\|avx2\|avx" /proc/cpuinfo | sort -u | tr "\n" " "
           echo
+          echo "--- 注册表里的 Gemm ---"
+          f=build/ncnn/src/layer_registry.h
+          grep -n "Gemm" "$f"
+          echo "--- 各注册表条目数 (对比是否对齐) ---"
+          for arr in layer_registry layer_registry_arch layer_registry_fma layer_registry_avx; do
+            echo -n "$arr: "
+            awk "/^static const layer_registry_entry $arr\[\]/,/^\};/" "$f" | grep -c "{"
+          done
+          echo "--- 枚举里的 Gemm ---"
+          grep -n "Gemm" build/ncnn/src/layer_type_enum.h
+          sed -n '1,12p' build/ncnn/src/layer_type_enum.h
           echo "--- 注册表探测程序 ---"
           cat > /tmp/probe.cpp <<'CPP'
           #include <stdio.h>
           #include "layer.h"
+          #include "layer_type_enum.h"
           int main()
           {
-              ncnn::Layer* gemm = ncnn::create_layer_cpu(ncnn::LayerType::Gemm);
-              ncnn::Layer* deconv = ncnn::create_layer_cpu(ncnn::LayerType::Deconvolution);
-              fprintf(stderr, "probe: Gemm=%p Deconvolution=%p\n", (void*)gemm, (void*)deconv);
+              int idx = ncnn::layer_to_index("Gemm");
+              fprintf(stderr, "probe: LayerType::Gemm=%d layer_to_index(Gemm)=%d\n", (int)ncnn::LayerType::Gemm, idx);
+              fprintf(stderr, "probe: by_index=%p by_name=%p Convolution=%p Deconvolution=%p\n",
+                      (void*)ncnn::create_layer_cpu((int)ncnn::LayerType::Gemm),
+                      (void*)ncnn::create_layer_cpu("Gemm"),
+                      (void*)ncnn::create_layer_cpu("Convolution"),
+                      (void*)ncnn::create_layer_cpu("Deconvolution"));
               return 0;
           }
           CPP
           g++ -O1 -fopenmp /tmp/probe.cpp -Isrc/ncnn/src -Ibuild/ncnn/src -Lbuild/ncnn/src -lncnn -ldl -lpthread -o /tmp/probe \
             && /tmp/probe
-
-          echo "--- 在生成源码里打印 gemm 指针后增量重建 ---"
-          ls build/ncnn/src/layer/x86/ | grep -i "deconvolution.*fma"
-          sed -i 's|gemm->load_param(pd);|fprintf(stderr, "[probe] gemm=%p\\n", (void*)gemm); gemm->load_param(pd);|' \
-            build/ncnn/src/layer/x86/deconvolution_x86_fma.cpp
-          grep -n "\[probe\] gemm" build/ncnn/src/layer/x86/deconvolution_x86_fma.cpp
-          cmake --build build -j"$(nproc)" 2>&1 | tail -3
-          cp build/waifu2x-ncnn-vulkan "pkg/$NAME/probe-bin"
-          cd "pkg/$NAME"
-          ./probe-bin -i "$GITHUB_WORKSPACE/images/0.jpg" -o "$GITHUB_WORKSPACE/diag.jpg" \
-            -m models-upconv_7_photo -s 2 -f jpg 2>&1 | tail -5
-          echo "退出码: $?"
 
       - name: 冒烟测试 (无 Vulkan 驱动, 走 CPU)
         shell: bash
