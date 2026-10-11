@@ -17,6 +17,12 @@
 #endif // _WIN32
 #include "webp_image.h"
 
+#if defined(__linux__)
+#include <dlfcn.h>
+#include <stdlib.h>
+#include <unistd.h>
+#endif
+
 #if _WIN32
 #include <wchar.h>
 static wchar_t* optarg = NULL;
@@ -419,6 +425,35 @@ void* save(void* args)
 }
 
 
+// Linux 上没有 Vulkan 驱动或设备时必须整段跳过 GPU 初始化: ncnn 的 create_gpu_instance()
+// 在实例创建失败后会段错误, 而 CPU 路径 (process_cpu) 不依赖 Vulkan.
+#if defined(__linux__)
+static bool vulkan_usable()
+{
+    void* handle = dlopen("libvulkan.so.1", RTLD_LAZY);
+    if (!handle)
+        return false;
+
+    dlclose(handle);
+
+    const char* icd_files = getenv("VK_ICD_FILENAMES");
+    if (!icd_files)
+        icd_files = getenv("VK_DRIVER_FILES");
+    if (icd_files && icd_files[0])
+        return true;
+
+    return access("/usr/share/vulkan/icd.d", F_OK) == 0
+        || access("/etc/vulkan/icd.d", F_OK) == 0
+        || access("/usr/local/share/vulkan/icd.d", F_OK) == 0;
+}
+#else
+static bool vulkan_usable()
+{
+    return true;
+}
+#endif
+
+
 #if _WIN32
 int wmain(int argc, wchar_t** argv)
 #else
@@ -750,11 +785,20 @@ int main(int argc, char** argv)
     CoInitializeEx(NULL, COINIT_MULTITHREADED);
 #endif
 
-    ncnn::create_gpu_instance();
+    const bool has_vulkan = vulkan_usable();
+
+    if (has_vulkan)
+    {
+        ncnn::create_gpu_instance();
+    }
+    else
+    {
+        fprintf(stderr, "no vulkan driver or device, running on cpu\n");
+    }
 
     if (gpuid.empty())
     {
-        gpuid.push_back(ncnn::get_default_gpu_index());
+        gpuid.push_back(has_vulkan ? ncnn::get_default_gpu_index() : -1);
     }
 
     const int use_gpu_count = (int)gpuid.size();
@@ -773,7 +817,7 @@ int main(int argc, char** argv)
     jobs_load = std::min(jobs_load, cpu_count);
     jobs_save = std::min(jobs_save, cpu_count);
 
-    int gpu_count = ncnn::get_gpu_count();
+    int gpu_count = has_vulkan ? ncnn::get_gpu_count() : 0;
     for (int i=0; i<use_gpu_count; i++)
     {
         if (gpuid[i] < -1 || gpuid[i] >= gpu_count)
@@ -947,7 +991,10 @@ int main(int argc, char** argv)
         waifu2x.clear();
     }
 
-    ncnn::destroy_gpu_instance();
+    if (has_vulkan)
+    {
+        ncnn::destroy_gpu_instance();
+    }
 
     return 0;
 }
